@@ -1,0 +1,11 @@
+﻿# Caches et sorties volumineuses des outils
+cache_permanents.json
+cache_stats.json
+instantanes/
+export/
+listing.csv
+listing.html
+couverture.html
+rapport_phase0.txt
+*.xml
+__pycache__/
