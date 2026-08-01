@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WME DiaLog
 // @namespace    https://github.com/DrSlump34
-// @version      0.04.00
+// @version      0.05.00
 // @description  Affiche dans WME les arrêtés de circulation permanents de DiaLog (vitesse, interdictions) avec leur géométrie réelle. Chargement par département avec progression autour du bouton, compteur sur la vue élargie.
 // @author       DrSlump34
 // @match        https://www.waze.com/*editor*
@@ -22,7 +22,7 @@
 
     const ID = 'wme-dialog';
     const NOM = 'WME DiaLog';
-    const VERSION = '0.04.00';
+    const VERSION = '0.05.00';
 
     // ------------------------------------------------------------------
     // SOURCE DES DONNEES
@@ -69,6 +69,10 @@
     const $id = i => document.getElementById(i);
     const ech = s => String(s == null ? '' : s).replace(/[&<>"]/g,
         c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+    // '2013-01-01' -> '01/01/2013'
+    const jj = s => (s && s.length === 10)
+        ? s.slice(8, 10) + '/' + s.slice(5, 7) + '/' + s.slice(0, 4) : (s || '');
 
     // ------------------------------------------------------------------
     // Geometrie de la vue
@@ -384,18 +388,44 @@
             box.innerHTML = '<p class="dlg-vide">Rien à traiter dans cette vue.</p>';
             return;
         }
-        box.innerHTML = li.map((a, i) =>
-            '<div class="dlg-item" data-i="' + i + '">'
-            + '<span class="dlg-pastille" style="background:'
-            + (a.al ? COULEURS.A : COULEURS[a.t]) + '"></span>'
-            + '<div class="dlg-corps">'
-            + '<div class="dlg-val">' + ech(a.v) + '</div>'
-            + (a.r ? '<div class="dlg-voie">' + ech(a.r) + '</div>' : '')
-            + '<div class="dlg-meta">' + ech(a.a)
-            + (a.c ? ' · ' + ech(a.c) : '') + '</div>'
-            + (a.al ? '<div class="dlg-alerte">' + ech(a.al) + '</div>' : '')
-            + '<div class="dlg-titre" title="' + ech(a.ti) + '">' + ech(a.ti) + '</div>'
-            + '</div></div>').join('');
+        box.innerHTML = li.map((a, i) => {
+            // 42,8 % des localisations n'ont aucun libelle de voie a la source.
+            // Un tiers est recuperable depuis l'intitule : on l'affiche, mais
+            // marque DEDUIT, pour ne pas le faire passer pour un champ officiel.
+            const voie = a.r
+                ? ('<div class="dlg-voie">' + ech(a.r)
+                    + (a.vd ? '<span class="dlg-dd" title="déduit de l’intitulé de '
+                        + 'l’arrêté, absent des champs de localisation">déduit</span>' : '')
+                    + '</div>')
+                : '<div class="dlg-voie dlg-sansvoie">voie non renseignée</div>';
+
+            const reperes = [];
+            if (a.lg) {
+                reperes.push(a.lg >= 1000 ? (a.lg / 1000).toFixed(1) + ' km' : a.lg + ' m');
+            }
+            reperes.push(a.a);
+            if (a.c) reperes.push(a.c);
+
+            const dates = [];
+            if (a.de) dates.push('effet ' + jj(a.de));
+            if (a.ds) dates.push('saisi ' + jj(a.ds));
+
+            return '<div class="dlg-item" data-i="' + i + '">'
+                + '<span class="dlg-pastille" style="background:'
+                + (a.al ? COULEURS.A : COULEURS[a.t]) + '"></span>'
+                + '<div class="dlg-corps">'
+                + '<div class="dlg-val">' + ech(a.v) + '</div>'
+                + voie
+                + '<div class="dlg-meta">' + ech(reperes.join(' · ')) + '</div>'
+                + (dates.length
+                    ? '<div class="dlg-meta">' + ech(dates.join(' · ')) + '</div>' : '')
+                + (a.al ? '<div class="dlg-alerte">' + ech(a.al) + '</div>' : '')
+                + '<div class="dlg-titre" title="' + ech(a.ti + ' — ' + a.o) + '">'
+                + ech(a.ti) + ' · ' + ech(a.o) + '</div>'
+                + (a.u ? '<a class="dlg-src" href="' + ech(a.u) + '" target="_blank" '
+                    + 'rel="noopener">arrêté source</a>' : '')
+                + '</div></div>';
+        }).join('');
         Array.prototype.forEach.call(box.querySelectorAll('.dlg-item'), el => {
             el.addEventListener('click', () => cadrer(li[parseInt(el.dataset.i, 10)]));
         });
@@ -520,7 +550,12 @@
             '.dlg-pastille { width:9px; height:9px; border-radius:50%; flex:0 0 auto; margin-top:3px; }',
             '.dlg-corps { min-width:0; flex:1; }',
             '.dlg-val { font-weight:600; }',
-            '.dlg-voie { color:#333; }',
+            '.dlg-voie { color:#222; font-weight:500; }',
+            '.dlg-sansvoie { color:#b0b0b0; font-style:italic; font-weight:400; }',
+            '.dlg-dd { margin-left:5px; padding:0 4px; border-radius:3px;',
+            '  background:#eef2f7; color:#7b8794; font-size:9px; font-weight:400;',
+            '  text-transform:uppercase; letter-spacing:.3px; vertical-align:1px; }',
+            '.dlg-src { font-size:10px; }',
             '.dlg-meta { color:#777; font-size:11px; }',
             '.dlg-alerte { color:#b45309; font-size:11px; }',
             '.dlg-titre { color:#aaa; font-size:10px; white-space:nowrap; overflow:hidden;',

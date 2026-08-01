@@ -23,12 +23,14 @@ Usage : python export_departements.py
 
 import collections
 import json
+import math
 import os
 import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from phase0_inventaire import CACHE, DEPARTEMENTS, normaliser, rattacher_orgs
+from phase0_inventaire import (CACHE, DEPARTEMENTS, normaliser, rattacher_orgs,
+                               uuid7_date)
 
 RACINE = os.path.dirname(os.path.abspath(__file__))
 SORTIE = os.path.join(RACINE, "departements")
@@ -41,6 +43,19 @@ RE_HORS_TOURISME = re.compile(
     r"semi.?remorque|agricol|agyicol|agricio|tracteur|hazardous|mati[eè]re|"
     r"caravan|camping.?car|convoi|\bengin|remorque|\d\s*[,.]?\d*\s*t\b|"
     r"transport\s+de\s+d[ée]chets", re.I)
+
+# 42,8 % des localisations n'ont NI roadName NI roadNumber. Un tiers d'entre
+# elles portent malgre tout la voie dans leur intitule (mesure du 01/08/2026 :
+# Brest 100 %, Sarthe 65 %, mais Lyon / Bordeaux / Paris 0 %). On la recupere,
+# en marquant la valeur comme DEDUITE pour ne pas la faire passer pour un
+# champ officiel.
+#   « Interdit dans les 2 sens – RUE D'AVRANCHES »  -> RUE D'AVRANCHES
+#   « 72_D0314_1 »                                  -> D314
+# ⚠️ \b ne coupe PAS entre '_' et 'D' (underscore = caractere de mot) : d'ou
+# les bornes explicites, un premier essai avec \b n'extrayait que 0,1 %.
+RE_APRES_TIRET = re.compile(r"[–—]\s*(.+)$")
+RE_ROUTE_TITRE = re.compile(r"(?:^|[^0-9A-Za-z])([ADMN])0*(\d{1,4})(?:$|[^0-9A-Za-z])")
+RE_URL = re.compile(r"https?://\S+")
 
 RE_RIVERAIN = re.compile(r"riverain|desserte?\s+locale|\bdeserte\b|localresident", re.I)
 RE_LIVRAISON = re.compile(r"livrais|citylogistic|demenag", re.I)
@@ -102,6 +117,41 @@ def arrondir(c):
     return c
 
 
+def voie_deduite(titre):
+    """Recupere un libelle de voie depuis l'intitule. Renvoie (voie, methode)."""
+    if not titre:
+        return None, None
+    m = RE_APRES_TIRET.search(titre)
+    if m and len(m.group(1).strip()) > 2:
+        return RE_URL.sub("", m.group(1)).strip(" -–—(),"), "titre"
+    m = RE_ROUTE_TITRE.search(titre)
+    if m:
+        return m.group(1).upper() + m.group(2), "titre"
+    return None, None
+
+
+def longueur_m(geo):
+    """Longueur approchee d'une geometrie lineaire, en metres."""
+    lignes = []
+    t = geo.get("type")
+    if t == "LineString":
+        lignes = [geo["coordinates"]]
+    elif t == "MultiLineString":
+        lignes = geo["coordinates"]
+    else:
+        return 0
+    total = 0.0
+    for ligne in lignes:
+        for i in range(1, len(ligne)):
+            x1, y1 = ligne[i - 1][0], ligne[i - 1][1]
+            x2, y2 = ligne[i][0], ligne[i][1]
+            ym = math.radians((y1 + y2) / 2)
+            dx = (x2 - x1) * 111320 * math.cos(ym)
+            dy = (y2 - y1) * 110540
+            total += math.hypot(dx, dy)
+    return round(total)
+
+
 def bbox_et_centre(geo):
     pts = []
     pile = [geo.get("coordinates")]
@@ -137,10 +187,18 @@ def main():
         n = par_cle.get(cle)
         dept = (sorted(n["depts"])[0] if n and n["depts"] else None)
 
+        # Certains intitules portent le lien vers l'arrete publie.
+        mu = RE_URL.search(r.get("title") or "")
+        url_source = mu.group(0).rstrip(").,;") if mu else None
+
         for m in r.get("measures") or []:
             if m.get("type") not in TYPES:
                 continue
             total += 1
+            # L'API n'expose aucun createdAt : la date de saisie ne s'obtient
+            # que par l'horodatage de l'UUIDv7 de la mesure.
+            ds = uuid7_date(m.get("uuid"))
+            saisie = ds.strftime("%Y-%m-%d") if ds else ""
             vs = m.get("vehicleSet") or {}
             carac = {c.get("name"): c.get("value")
                      for c in (vs.get("maxCharacteristics") or []) if c.get("name")}
@@ -185,10 +243,14 @@ def main():
                 ns = loc.get("namedStreet") or {}
                 nr = loc.get("numberedRoad") or {}
                 voie = ns.get("roadName") or ""
+                origine = "champ"
                 if not voie and nr.get("roadNumber"):
                     voie = nr["roadNumber"]
                     if nr.get("fromPointNumber") is not None:
                         voie += f" PR {nr['fromPointNumber']}"
+                if not voie:
+                    voie, origine = voie_deduite(r.get("title"))
+                    voie = voie or ""
                 commune = ns.get("cityLabel") or ""
                 if commune.endswith(")") and "(" in commune:
                     commune = commune.rsplit("(", 1)[0].strip()
@@ -199,8 +261,9 @@ def main():
                         continue
                     bbox, cx, cy = bc
                     ponctuel = g.get("type") in ("Point", "MultiPoint")
+                    lg = longueur_m(g)
                     g = {"type": g["type"], "coordinates": arrondir(g["coordinates"])}
-                    par_dept[dept or "00"].append({
+                    ligne = {
                         "t": TYPES[m["type"]],
                         "v": valeur,
                         "r": voie,
@@ -211,9 +274,18 @@ def main():
                         "al": " ; ".join(alertes + (["géométrie ponctuelle"] if ponctuel else [])),
                         "ti": (r.get("title") or "")[:120],
                         "o": org.get("name") or "",
+                        "id": r.get("identifier") or "",
+                        "de": (r.get("startDate") or "")[:10],   # date d'effet
+                        "ds": saisie,                            # date de saisie
+                        "lg": lg,                                # longueur en metres
                         "b": bbox, "x": cx, "y": cy,
                         "g": g,
-                    })
+                    }
+                    if origine == "titre":
+                        ligne["vd"] = 1   # voie DEDUITE de l'intitule, pas un champ
+                    if url_source:
+                        ligne["u"] = url_source
+                    par_dept[dept or "00"].append(ligne)
 
     os.makedirs(SORTIE, exist_ok=True)
     index = {}
