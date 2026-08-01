@@ -52,7 +52,6 @@
     const PLAFOND_AFFICHE = 400;
 
     const COULEURS = { V: '#0b6bcb', I: '#d73027', A: '#f5a623' };
-    const LIBELLE = { V: 'Vitesse', I: 'Interdiction' };
 
     // Bbox REELLE des donnees de chaque departement (pas le contour
     // administratif), produite par export_departements.py. Permet de savoir
