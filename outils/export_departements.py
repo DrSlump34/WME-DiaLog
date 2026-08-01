@@ -224,6 +224,12 @@ def main():
 
     total_ko = 0
     for dep in sorted(par_dept):
+        # '00' = arretes dont le departement n'a pas pu etre resolu. Ils ne sont
+        # rattachables a aucune vue : ni fichier, ni entree d'index.
+        if dep == "00":
+            print(f"{'--':<5}{'(departement non resolu)':<26}"
+                  f"{len(par_dept[dep]):>8}{'ignore':>8}")
+            continue
         lignes = par_dept[dep]
         chemin = os.path.join(SORTIE, f"dept_{dep}.json")
         with open(chemin, "w", encoding="utf-8") as f:
